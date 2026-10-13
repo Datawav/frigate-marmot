@@ -14,8 +14,8 @@ from frigate_marmot.worker import Worker
 
 def test_full_runtime_mocked_startup_duplicate_ingestion_workers_and_shutdown(config, review, event, monkeypatch):
     now = time.time()
-    review.update(start_time=now - 1000, end_time=now - 800)
-    event.update(start_time=now - 1000, end_time=now - 800)
+    review.update(start_time=now - 1000, end_time=now - 900)
+    event.update(start_time=now - 1000, end_time=now - 900)
     write_json(config.destination_path, {"account": "a" * 64, "group": "b" * 64,
                                        "config_sha256": hashlib.sha256(config.path.read_bytes()).hexdigest()})
     profile = Path(config.data["health"]["profile_file"])
