@@ -40,6 +40,8 @@ class MQTT:
     def __init__(self, config):
         self.config, self.connected, self.available = config, False, None
         self.persistence_failed = False
+        self.subscription_failed = False
+        self.subscription_mid = None
         settings = config.data["mqtt"]
         store = Store(config.state / "queue.sqlite3")
         row = store.db.execute("SELECT value FROM metadata WHERE key='mqtt_client_id'").fetchone()
@@ -56,20 +58,32 @@ class MQTT:
         self.client.on_connect = self.on_connect
         self.client.on_disconnect = self.on_disconnect
         self.client.on_message = self.on_message
+        self.client.on_subscribe = self.on_subscribe
         self.client.reconnect_delay_set(min_delay=1, max_delay=60)
 
     def on_connect(self, client, userdata, flags, reason_code, properties):
-        self.connected = reason_code == 0
-        if self.connected:
+        self.connected = False
+        if reason_code == 0:
             base = self.config.data["mqtt"].get("topic_prefix", "frigate")
-            client.subscribe([(base + "/reviews", 1), (base + "/tracked_object_update", 1), (base + "/available", 1)])
+            result, self.subscription_mid = client.subscribe([(base + "/reviews", 1), (base + "/tracked_object_update", 1), (base + "/available", 1)])
+            if result != mqtt.MQTT_ERR_SUCCESS:
+                self.subscription_failed = True
+
+    def on_subscribe(self, client, userdata, mid, reason_codes, properties):
+        if mid != self.subscription_mid:
+            return
+        self.connected = len(reason_codes) == 3 and all(getattr(c, "value", c) in (0, 1) for c in reason_codes)
+        if not self.connected:
+            self.subscription_failed = True
+            LOG.warning("MQTT subscription rejected; verify read-only topic ACLs")
 
     def on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties):
         self.connected = False
 
     def on_message(self, client, userdata, message):
-        store = Store(self.config.state / "queue.sqlite3")
+        store = None
         try:
+            store = Store(self.config.state / "queue.sqlite3")
             if len(message.payload) > 1024 * 1024:
                 raise ValueError("oversized MQTT payload")
             topic = message.topic.rsplit("/", 1)[-1]
@@ -77,6 +91,8 @@ class MQTT:
                 self.available = message.payload.decode()
             else:
                 value = json.loads(message.payload)
+                if not isinstance(value, dict):
+                    raise ValueError("MQTT event must be an object")
                 if topic == "reviews":
                     ingest(store, value, self.config.data.get("alerts", {}).get("snapshot_mode", "early"))
                 elif topic == "tracked_object_update":
@@ -87,7 +103,16 @@ class MQTT:
             # QoS1 ACK only after committed ingestion. Duplicate delivery is harmless.
             client.ack(message.mid, message.qos)
         except (ValueError, KeyError, TypeError):
-            store.db.execute("INSERT OR REPLACE INTO metadata VALUES('invalid_mqtt_payload','1')")
+            try:
+                with store.transaction():
+                    row = store.db.execute("SELECT value FROM metadata WHERE key='invalid_mqtt_payload'").fetchone()
+                    store.db.execute("INSERT OR REPLACE INTO metadata VALUES('invalid_mqtt_payload',?)", (str(int(row[0]) + 1 if row else 1),))
+                    store.db.execute("INSERT OR REPLACE INTO metadata VALUES('invalid_mqtt_last_at',?)", (str(time.time()),))
+            except Exception:
+                self.persistence_failed = True
+                self.connected = False
+                client.disconnect()
+                return
             client.ack(message.mid, message.qos)  # persist poison-message diagnostic, then drain it
             LOG.warning("invalid MQTT event; payload omitted")
         except Exception:
@@ -96,7 +121,8 @@ class MQTT:
             LOG.warning("MQTT persistence failed; reconnecting without acknowledgement")
             client.disconnect()
         finally:
-            store.close()
+            if store is not None:
+                store.close()
 
     def start(self):
         settings = self.config.data["mqtt"]
@@ -175,6 +201,8 @@ def run(config):
                 except Exception:
                     health_sample(health_store, "saved profile", False, now)
                 health_sample(health_store, "MQTT", broker.connected, now)
+                bad_payload = health_store.db.execute("SELECT value FROM metadata WHERE key='invalid_mqtt_last_at'").fetchone()
+                health_sample(health_store, "MQTT event validation", not bad_payload or now - float(bad_payload[0]) >= 300, now)
                 try:
                     disks = [config.state] + [Path(p).expanduser() for p in config.data["health"].get("disk_paths", [])]
                     enough = all(shutil.disk_usage(p).free >= int(config.data["health"].get("min_free_mb", 1024)) * 1024 * 1024 for p in disks)
@@ -204,6 +232,8 @@ def run(config):
         while not stop.is_set():
             if broker.persistence_failed:
                 raise RuntimeError("MQTT persistence failed; restart to recover unacknowledged messages")
+            if broker.subscription_failed:
+                raise RuntimeError("MQTT subscription rejected; retry through service restart")
             if not all(t.is_alive() for t in threads):
                 raise RuntimeError("notifier worker exited unexpectedly")
             now = time.time()

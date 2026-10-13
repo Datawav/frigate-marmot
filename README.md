@@ -31,6 +31,8 @@ official CLI rather than copied protocol or encryption code.
 - Checks Frigate, authenticated MQTT, Armed camera processing, disk space and
   the bot daemon every 30 seconds. A fault lasting three minutes queues one
   warning and one recovery when resolved. Warning state survives restarts.
+  Denied MQTT subscriptions count as faults; malformed events are counted in
+  status and sustained validation failures warn the owner.
 
 Frigate controls are read-only. The connector never changes the owner's saved
 Armed/Disarmed profile. Disarmed inactivity is expected. Phone alerts require an
@@ -141,6 +143,8 @@ The group must contain the bot with active local membership. To create the bot
 before inviting it into an existing group, follow [manual identity setup](docs/recovery.md#manual-identity-setup).
 Configuration pins the destination to this state directory. Use a separate state
 directory for another recipient; pending jobs must never silently change destination.
+The generated units use the default paths. A separate installation also needs
+units pointing to its own config, bot home and socket.
 
 Attachments use the group's MDK encrypted-media settings. An optional
 `marmot.media_server` overrides the upload endpoint with an explicitly selected
@@ -211,7 +215,11 @@ Three outcomes mean different things:
 Network failures before an external effect retry with backoff. Upload and send
 intents are committed before calling MDK. A timeout or lost response after an
 external effect becomes `uncertain`; sends reconcile using a unique message
-marker and the correct sender/group. MDK 0.13.0 does not expose a connector
+marker and the correct sender/group. The pinned CLI returns locally projected
+plaintext in `messages search`; if that projection or marker is unavailable,
+the connector keeps the job uncertain rather than resending it. Live daemon
+integration remains part of the owner's deployment verification.
+MDK 0.13.0 does not expose a connector
 upload-idempotency key, so an ambiguous upload is held for explicit recovery.
 This favors avoiding duplicate private-media uploads over claiming exactly-once
 delivery. See [recovery](docs/recovery.md).
@@ -252,7 +260,9 @@ python3 -m venv .venv
 Tests use synthetic MQTT/API fixtures, a fake CLI and generated black video.
 They cover deduplication, restart boundaries, unknown effects, conservative
 recognition, buffered split timing, health warning persistence, installer
-idempotence and user-unit contents. No real camera endpoint or bot account is used.
+idempotence and user-unit contents. A simulated full runtime exercises actual
+supervisor and worker threads, duplicate MQTT/API ingestion, shutdown and saved
+profile preservation. No real camera endpoint or bot account is used.
 
 Further background: [Frigate MQTT](https://docs.frigate.video/integrations/mqtt/),
 [Frigate recording](https://docs.frigate.video/configuration/record/), and

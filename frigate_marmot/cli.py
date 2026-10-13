@@ -47,7 +47,9 @@ def main(argv=None):
             store = Store(config.state / "queue.sqlite3")
             rows = store.db.execute("SELECT state,count(*) FROM jobs GROUP BY state").fetchall()
             if arguments.command == "status":
-                print(json.dumps({"jobs": dict(rows), "phone_delivery": "not_confirmed_by_connector"}))
+                bad = store.db.execute("SELECT value FROM metadata WHERE key='invalid_mqtt_payload'").fetchone()
+                print(json.dumps({"jobs": dict(rows), "invalid_mqtt_payloads": int(bad[0]) if bad else 0,
+                                  "phone_delivery": "not_confirmed_by_connector"}))
             else:
                 print(json.dumps({"uncertain": [dict(r) for r in store.db.execute("SELECT id,kind,error FROM jobs WHERE state='uncertain'")]}))
             store.close()

@@ -143,10 +143,43 @@ def test_mqtt_commits_before_ack_and_deduplicates(config, store, review):
 def test_mqtt_uses_authenticated_persistent_qos1_subscription(config):
     broker = MQTT(config)
     values = []
-    client = SimpleNamespace(subscribe=lambda x: values.extend(x))
+    def subscribe(x):
+        values.extend(x)
+        return 0, 7
+    client = SimpleNamespace(subscribe=subscribe)
     broker.on_connect(client, None, None, 0, None)
     assert values == [("frigate/reviews", 1), ("frigate/tracked_object_update", 1), ("frigate/available", 1)]
+    assert not broker.connected
+    broker.on_subscribe(client, None, 7, [1, 1, 1], None)
     assert broker.connected
+
+
+def test_subscription_denial_is_not_healthy(config):
+    broker = MQTT(config)
+    broker.subscription_mid = 7
+    broker.on_subscribe(None, None, 7, [1, 128, 1], None)
+    assert not broker.connected and broker.subscription_failed
+
+
+def test_database_open_failure_does_not_ack_and_is_detected(config, monkeypatch):
+    import frigate_marmot.runner as module
+    broker = MQTT(config)
+    def fail(*args):
+        raise OSError("synthetic disk failure")
+    monkeypatch.setattr(module, "Store", fail)
+    outcomes = []
+    client = SimpleNamespace(ack=lambda *a: outcomes.append("ack"), disconnect=lambda: outcomes.append("disconnect"))
+    broker.on_message(client, None, SimpleNamespace(topic="frigate/reviews", payload=b"{}", mid=1, qos=1))
+    assert outcomes == ["disconnect"]
+    assert broker.persistence_failed
+
+
+def test_invalid_payload_is_persisted_before_ack(config, store):
+    broker = MQTT(config)
+    def ack(*args):
+        assert store.db.execute("SELECT value FROM metadata WHERE key='invalid_mqtt_payload'").fetchone()[0] == "1"
+    broker.on_message(SimpleNamespace(ack=ack), None, SimpleNamespace(topic="frigate/reviews", payload=b"[]", mid=1, qos=1))
+    assert store.db.execute("SELECT value FROM metadata WHERE key='invalid_mqtt_last_at'").fetchone()
 
 
 def test_reconciliation_restart_and_failed_scan_watermark(store, review):
