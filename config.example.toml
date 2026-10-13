@@ -1,0 +1,34 @@
+# Owner-only configuration. Installer substitutes paths; preserve your profile.
+state_dir = "@HOME@/.local/state/frigate-marmot"
+
+[mqtt]
+host = "localhost"
+port = 8883
+username = "frigate-marmot"
+password_file = "@HOME@/.config/frigate-marmot/mqtt-password"
+tls = true
+# ca_file = "/path/to/your/broker-ca.pem"
+topic_prefix = "frigate"
+
+[frigate]
+url = "http://127.0.0.1:5000"
+allow_http = true # local read-only Frigate API; use HTTPS for a remote host
+# token_file = "@HOME@/.config/frigate-marmot/frigate-token"
+# ca_file = "/path/to/your/frigate-ca.pem"
+max_attachment_mb = 128
+
+[marmot]
+wn = "@PREFIX@/bin/wn"
+manifest = "@PREFIX@/bin/mdk-provenance.json"
+# media_server = "https://your-blossom-server.example" # optional encrypted uploads
+
+[alerts]
+snapshot_mode = "early" # or "after_visit" to suppress all known-only visits
+suppress_known = false # opt-in; requires complete recognition evidence >= 0.95
+registered_people = []
+
+[health]
+profile_file = "@HOME@/.config/frigate-marmot/profile.json"
+cameras = ["indoor"]
+min_free_mb = 1024
+# disk_paths = ["/media/frigate/recordings"] # also check local recording storage
