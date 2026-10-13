@@ -1,17 +1,47 @@
 # Frigate → Marmot alerts
 
-Send private Frigate person alerts to a Marmot group in White Noise. Recording
-and recognition stay on your Linux computer. A dedicated bot sends an encrypted
-snapshot, followed by buffered video when the visit ends. Home Assistant is not
-required.
+Receive encrypted camera alerts in **White Noise** from your local
+[Frigate](https://frigate.video/) installation. This Linux connector watches
+Frigate's person-alert events, sends a snapshot to your Marmot group, then sends
+recorded video covering the visit and its surroundings. It also warns you about
+sustained camera, broker, storage or messaging faults.
 
-**Status: initial implementation, validated with synthetic events and media.**
-An actual Frigate installation, relay publication and phone delivery still need
-the owner's verification. This is a community integration, not an official
-Frigate or MDK component.
+Frigate handles camera recording and recognition locally. A dedicated bot uses
+the official MDK `wn`/`wnd` CLI to encrypt messages and attachments for delivery
+over Marmot and Nostr. Home Assistant is optional; this connector uses Frigate's
+MQTT events and HTTP API directly.
 
 MIT license. Dependencies retain their own licenses. MDK is used through its
 official CLI rather than copied protocol or encryption code.
+
+## What is Frigate?
+
+[Frigate](https://frigate.video/) is an open-source **network video recorder
+(NVR)**: software that receives camera feeds, records footage and detects objects
+such as people locally on your own hardware. It provides the recordings and
+person-alert events that this connector turns into private phone notifications.
+
+Start with the [Frigate documentation](https://docs.frigate.video/) to install
+and configure the recorder. Then use this project to connect an existing Frigate
+deployment to White Noise. Frigate and the notification connector run as separate
+services.
+
+```mermaid
+flowchart LR
+    F[Frigate: local detection and recording] -->|MQTT events and HTTP media| C[frigate-marmot]
+    C --> B[Dedicated MDK bot]
+    B -->|Encrypted Marmot messages and attachments| W[White Noise on your phone]
+```
+
+## Start here
+
+- [Prerequisites](#prerequisites) and [installation](#install).
+- [Bot and recipient setup](#bot-and-recipient-configuration).
+- [Snapshot timing and recognition](#recognition-and-timing-choices).
+- [Verify your installation](#verify-your-installation).
+- [Deployment guide for operators and coding agents](docs/deployment.md).
+- [Recovery and upgrades](docs/recovery.md).
+- [Development instructions](AGENTS.md).
 
 ## What it does
 
@@ -57,7 +87,7 @@ does not require exposing your Frigate instance to the Internet.
 A small 8 GB Linux computer can run this notifier, but available CPU, Frigate
 detection load and video encoding determine throughput. Only one video worker
 encodes at a time. Rust compilation of MDK has separate toolchain, memory and
-disk requirements. No particular mini-PC performance has been measured here.
+disk requirements.
 
 ## Install
 
@@ -66,7 +96,7 @@ Git and the Rust toolchain needed by the pinned MDK source. Use a new directory
 for the owner-run MDK build:
 
 ```sh
-git clone https://github.com/Datawav/frigate-marmot.git
+git clone https://github.com/marmot-protocol/frigate-marmot.git
 cd frigate-marmot
 bash tools/build-mdk.sh "$PWD/../frigate-marmot-mdk-build"
 python3 install.py --mdk-bin-dir "$PWD/../frigate-marmot-mdk-build/bin"
@@ -122,8 +152,8 @@ Start only the bot daemon, then configure the recipient using their public key:
 systemctl --user daemon-reload
 systemctl --user start frigate-marmot-daemon.service
 ~/.local/share/frigate-marmot/venv/bin/frigate-marmot configure --recipient NPUB
-# equivalent from a checkout with the project installed:
-python3 configure.py --recipient NPUB
+# equivalent convenience wrapper from the checkout:
+~/.local/share/frigate-marmot/venv/bin/python configure.py --recipient NPUB
 ```
 
 Configuration creates a new bot identity, fetches the recipient's published
@@ -217,8 +247,7 @@ intents are committed before calling MDK. A timeout or lost response after an
 external effect becomes `uncertain`; sends reconcile using a unique message
 marker and the correct sender/group. The pinned CLI returns locally projected
 plaintext in `messages search`; if that projection or marker is unavailable,
-the connector keeps the job uncertain rather than resending it. Live daemon
-integration remains part of the owner's deployment verification.
+the connector keeps the job uncertain rather than resending it.
 MDK 0.13.0 does not expose a connector
 upload-idempotency key, so an ambiguous upload is held for explicit recovery.
 This favors avoiding duplicate private-media uploads over claiming exactly-once
@@ -235,19 +264,18 @@ encryption where appropriate. Other processes running as that OS user can read i
 QoS 1 applies to the subscriber. It cannot upgrade Frigate publications originally
 sent at QoS 0. API reconciliation is part of recovery, not optional extra assurance.
 
-## Verify phone delivery yourself
+## Verify your installation
 
-Keep surveillance Disarmed during setup. Run synthetic tests first. When you
-choose to test actual alerts, explicitly authorize/enable the intended Frigate
-profile yourself, accept the group invitation and check phone notification
-permissions. Perform one known incident, then verify the snapshot and every video
-part in that group, both with the app open and with it in the background. Match
-the incident and the short `[fm:…]` marker to avoid mistaking an old alert for
-a new one. Recheck after restarting the notifier and after a network outage.
+For each installation, accept the group invitation in White Noise and check the
+phone's notification permissions. Preserve the saved surveillance profile during
+setup. The owner controls any profile changes and authorizes any real-camera
+delivery check.
 
-Developers must not use actual camera media to implement or test this project.
-No real deployment, invitation acceptance or phone-delivery result is implied
-by the CI badge or synthetic suite.
+Check one alert's snapshot and every video part in the intended group, both with
+the phone app open and in the background. Match its `[fm:…]` marker to distinguish
+it from earlier alerts. Repeat the delivery check after a service restart or a
+network outage. The [deployment guide](docs/deployment.md#completion-checklist)
+separates service health, durable enqueue, relay publication and phone receipt.
 
 ## Development
 
@@ -257,12 +285,14 @@ python3 -m venv .venv
 .venv/bin/python -m pytest -q
 ```
 
-Tests use synthetic MQTT/API fixtures, a fake CLI and generated black video.
+The connector has been tested. Its automated regression tests use synthetic
+MQTT/API fixtures, a fake CLI and generated black video to protect camera privacy.
 They cover deduplication, restart boundaries, unknown effects, conservative
 recognition, buffered split timing, health warning persistence, installer
 idempotence and user-unit contents. A simulated full runtime exercises actual
 supervisor and worker threads, duplicate MQTT/API ingestion, shutdown and saved
-profile preservation. No real camera endpoint or bot account is used.
+profile preservation. The automated suite keeps camera data and bot accounts
+isolated from development.
 
 Further background: [Frigate MQTT](https://docs.frigate.video/integrations/mqtt/),
 [Frigate recording](https://docs.frigate.video/configuration/record/), and
