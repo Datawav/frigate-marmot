@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "frigate-marmot"
+version = "0.1.0"
+description = "Private Frigate alerts through Marmot and White Noise"
+requires-python = ">=3.11"
+license = {file = "LICENSE"}
+dependencies = ["paho-mqtt>=2.1,<3", "requests>=2.32,<3"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[project.scripts]
+frigate-marmot = "frigate_marmot.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["frigate_marmot*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
